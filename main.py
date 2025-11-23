@@ -12,6 +12,10 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from sqlalchemy.orm import Session
 
+# --- NOUVEAUX IMPORTS POUR REACT ---
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
 # --- Imports de nos fichiers locaux ---
 from database import engine, SessionLocal
 import models
@@ -33,18 +37,10 @@ app = FastAPI(
 # -----------------------------------------------
 # --- CONFIGURATION CORS (Azure Ready) ---
 # -----------------------------------------------
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
-origins = [
-    "http://localhost:3000",       # React Local
-    "http://127.0.0.1:3000",       # React Local IP
-    FRONTEND_URL,                  # URL Production Azure
-]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=["*"],  # <--- L'étoile magique : autorise tout le monde    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -109,16 +105,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
 # --- ROUTES PUBLIQUES (Données Voyage) ---
 # -----------------------------------------------
 
-@app.get("/")
-def read_root():
-    return {
-        "message": "API TravelPulse en ligne !", 
-        "env": "Azure Ready",
-        "cors_allowed": origins
-    }
+# NOTE: J'ai supprimé l'ancienne route "/" ici pour laisser la place au Frontend React
 
 # --- 1. LISTE DES PAYS (VERSION CORRIGÉE : LISTE FIXE) ---
-# Plus d'appel à restcountries.com qui plante
 @app.get("/api/countries")
 def get_all_countries():
     print("--- Appel API: Récupération des pays (Mode Statique) ---")
@@ -285,7 +274,7 @@ def get_flights(destination: str, departure_date: Optional[str] = None):
         
         if data.get("data"):
             flight = data["data"][0]
-            return {
+            flight_info = {
                 "price": "N/A", 
                 "duration": "Direct" if flight["flight"].get("codeshared") is None else "Escale",
                 "stops": 0,
@@ -293,6 +282,7 @@ def get_flights(destination: str, departure_date: Optional[str] = None):
                 "airline_name": flight["airline"]["name"],
                 "link": f"https://www.google.com/flights?q=Vols+de+CMN+a+{iata}"
             }
+            return flight_info
         return {"error": "Aucun vol trouvé ce jour-là."}
     except Exception as e:
         print(f"Erreur vol: {e}")
@@ -386,6 +376,36 @@ def change_password(passwords: schemas.UserChangePassword, db: Session = Depends
     current_user.hashed_password = security.get_password_hash(passwords.new_password)
     db.commit()
     return {"message": "Mot de passe mis à jour"}
+
+
+# =================================================================
+# --- INTEGRATION DU FRONTEND REACT (STATIC FILES) ---
+# =================================================================
+
+# On vérifie si le dossier "static" existe
+if os.path.exists("static"):
+
+    # 1. Montage des fichiers CSS/JS de React
+    app.mount("/static", StaticFiles(directory="static/static"), name="static")
+
+    # 2. Route racine qui affiche le site React
+    @app.get("/")
+    async def read_root():
+        return FileResponse('static/index.html')
+
+    # 3. Gestion des erreurs 404 (Pour le routing React)
+    @app.exception_handler(404)
+    async def custom_404_handler(request, exc):
+        # Si c'est une API, on renvoie une erreur JSON
+        if request.url.path.startswith("/api"):
+            return {"error": "API Endpoint not found"}, 404
+        
+        # Sinon, on renvoie le site React
+        return FileResponse('static/index.html')
+
+else:
+    print("⚠️ AVERTISSEMENT : Dossier 'static' introuvable. Le site React ne s'affichera pas.")
+
 
 if __name__ == "__main__":
     # En production Azure, Gunicorn est utilisé à la place.
